@@ -89,6 +89,7 @@ parse :: proc "contextless" () -> bool {
 	expect_bytes(&p, {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, "magic") or_return
 
 	ihdr: IHDR
+	plte: PLTE
 
 	// parse chunks
 	for {
@@ -116,6 +117,9 @@ parse :: proc "contextless" () -> bool {
 		case "IHDR":
 			ihdr, _ = parse_ihdr(&chunk_parser)
 			fmt.printfln("%#v", ihdr)
+		case "PLTE":
+			plte, _ = parse_plte(&chunk_parser)
+			fmt.printfln("%#v", plte)
 		}
 
 		if string(chunk_type.name) == "IEND" {
@@ -279,6 +283,54 @@ parse_ihdr :: proc(p: ^Parser, cur: ^int = nil) -> (ihdr: IHDR, ok: bool) {
 	return ihdr, true
 }
 
+PLTE :: struct {
+	entries: []PLTEEntry,
+}
+
+PLTEEntry :: struct {
+	R, G, B: u8,
+}
+
+parse_plte :: proc(p: ^Parser, cur: ^int = nil) -> (plte: PLTE, ok: bool) {
+	initial_cur := p.cur
+	if cur != nil {
+		cur^ = initial_cur
+	}
+
+	// We can do this because we call this with a subparser scoped to the chunk data.
+	if len(p.buf) % 3 != 0 {
+		parser_err(
+			p,
+			initial_cur,
+			fmt.aprintf("invalid PLTE data: data size of %d not divisible by 3", len(p.buf)),
+		)
+		return
+	}
+
+	num_entries := len(p.buf) / 3
+	if num_entries < 1 || 256 < num_entries {
+		parser_err(
+			p,
+			initial_cur,
+			fmt.aprintf(
+				"invalid PLTE data: invalid number of entries (got %d, expected 1 to 256)",
+				num_entries,
+			),
+			.Warning,
+		)
+	}
+	plte.entries = make([]PLTEEntry, num_entries)
+	for i in 0 ..< num_entries {
+		plte.entries[i] = {
+			R = must(read_byte(p, "PLTE entry R")),
+			G = must(read_byte(p, "PLTE entry G")),
+			B = must(read_byte(p, "PLTE entry B")),
+		}
+	}
+
+	return plte, true
+}
+
 // ----------------------------------------------
 // General parsing and utilities
 
@@ -387,6 +439,11 @@ hexes :: proc(data: []byte, allocator := context.allocator) -> string {
 		strings.write_rune(&sb, runes[b & 0x0F]) // low half
 	}
 	return strings.clone(strings.to_string(sb), allocator)
+}
+
+must :: proc(v: $T, ok: bool) -> T {
+	assert(ok)
+	return v
 }
 
 // --------------------------------
