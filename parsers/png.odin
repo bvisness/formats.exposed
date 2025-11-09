@@ -89,10 +89,11 @@ parse :: proc "contextless" () -> bool {
 	expect_bytes(&p, {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, "magic") or_return
 
 	ihdr: IHDR
-	plte: PLTE
+	plte: Maybe(PLTE)
+	idats := make([dynamic]IDAT)
 
 	// parse chunks
-	for {
+	chunks: for {
 		data_len := parse_png_int32(&p, "chunk size") or_return
 		chunk_type := parse_chunk_type(&p) or_return
 
@@ -120,10 +121,12 @@ parse :: proc "contextless" () -> bool {
 		case "PLTE":
 			plte, _ = parse_plte(&chunk_parser)
 			fmt.printfln("%#v", plte)
-		}
-
-		if string(chunk_type.name) == "IEND" {
-			break
+		case "IDAT":
+			idat, _ := parse_idat(&chunk_parser)
+			// fmt.printfln("%#v", idat)
+			append(&idats, idat)
+		case "IEND":
+			break chunks
 		}
 	}
 
@@ -329,6 +332,22 @@ parse_plte :: proc(p: ^Parser, cur: ^int = nil) -> (plte: PLTE, ok: bool) {
 	}
 
 	return plte, true
+}
+
+IDAT :: struct {
+	data: []byte,
+}
+
+parse_idat :: proc(p: ^Parser, cur: ^int = nil) -> (idat: IDAT, ok: bool) {
+	if cur != nil {
+		cur^ = p.cur
+	}
+
+	// Shortcut this one.
+	idat = IDAT {
+		data = p.buf,
+	}
+	return idat, true
 }
 
 // ----------------------------------------------
