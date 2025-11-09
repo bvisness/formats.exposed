@@ -90,7 +90,10 @@ parse :: proc "contextless" () -> bool {
 
 	ihdr: IHDR
 	plte: Maybe(PLTE)
-	idats := make([dynamic]IDAT)
+	idats := make([dynamic]IDAT) // note that all IDATs together form a single zlib datastream
+	gama: Maybe(int)
+	srgb: Maybe(u8)
+	phys: Maybe(PHYS)
 
 	// parse chunks
 	chunks: for {
@@ -127,6 +130,19 @@ parse :: proc "contextless" () -> bool {
 			append(&idats, idat)
 		case "IEND":
 			break chunks
+
+		// Color space info
+		case "gAMA":
+			gama, _ = parse_gama(&chunk_parser)
+			fmt.printfln("%d", gama)
+		case "sRGB":
+			srgb, _ = parse_srgb(&chunk_parser)
+			fmt.printfln("%d", srgb)
+
+		// Miscellaneous info
+		case "pHYs":
+			phys, _ = parse_phys(&chunk_parser)
+			fmt.printfln("%#v", phys)
 		}
 	}
 
@@ -348,6 +364,34 @@ parse_idat :: proc(p: ^Parser, cur: ^int = nil) -> (idat: IDAT, ok: bool) {
 		data = p.buf,
 	}
 	return idat, true
+}
+
+parse_gama :: proc(p: ^Parser, cur: ^int = nil) -> (int, bool) {
+	if cur != nil {
+		cur^ = p.cur
+	}
+	return parse_png_int32(p, "gAMA gamma value")
+}
+
+parse_srgb :: proc(p: ^Parser, cur: ^int = nil) -> (u8, bool) {
+	if cur != nil {
+		cur^ = p.cur
+	}
+	return read_byte(p, "sRGB rendering intent")
+}
+
+PHYS :: struct {
+	x, y: int,
+	unit: u8,
+}
+
+parse_phys :: proc(p: ^Parser, cur: ^int = nil) -> (phys: PHYS, ok: bool) {
+	phys = PHYS {
+		x    = parse_png_int32(p, "pHYs X") or_return,
+		y    = parse_png_int32(p, "pHYs Y") or_return,
+		unit = read_byte(p, "pHYs unit") or_return,
+	}
+	return phys, true
 }
 
 // ----------------------------------------------
