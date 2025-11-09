@@ -1,6 +1,8 @@
 package png
 
 import "base:runtime"
+import "core:bytes"
+import "core:compress/zlib"
 import "core:encoding/endian"
 import "core:fmt"
 import "core:mem"
@@ -90,21 +92,19 @@ parse :: proc "contextless" () -> bool {
 
 	ihdr: IHDR
 	plte: Maybe(PLTE)
-	idats := make([dynamic]IDAT) // note that all IDATs together form a single zlib datastream
+	idats := make([dynamic][]byte) // note that all IDATs together form a single zlib datastream
 	gama: Maybe(int)
 	srgb: Maybe(u8)
 	phys: Maybe(PHYS)
 
 	// parse chunks
 	chunks: for {
+		data_cur, crc_cur: int
+
 		data_len := parse_png_int32(&p, "chunk size") or_return
 		chunk_type := parse_chunk_type(&p) or_return
-
-		data_cur := p.cur
-		data := read_bytes(&p, data_len, "chunk data") or_return
-
-		crc_cur := p.cur
-		expected_crc := parse_u32(&p, "crc") or_return
+		data := read_bytes(&p, data_len, "chunk data", &data_cur) or_return
+		expected_crc := parse_u32(&p, "crc", &crc_cur) or_return
 		actual_crc := crc(chunk_type.name, data)
 		if expected_crc != actual_crc {
 			parser_err(
@@ -146,19 +146,33 @@ parse :: proc "contextless" () -> bool {
 		}
 	}
 
+	data: []byte
+	{
+		data_compressed := slice.concatenate(idats[:])
+
+		buf: bytes.Buffer
+		err := zlib.inflate(input = data_compressed, buf = &buf)
+		defer bytes.buffer_destroy(&buf)
+		if err != nil {
+			fmt.printf("\nError: %v\n", err)
+		}
+		data = bytes.buffer_to_bytes(&buf)
+	}
+	fmt.printfln("Decompressed data: %d bytes", len(data))
+
 	return true
 }
 
-parse_u32 :: proc(p: ^Parser, thing: string) -> (v: u32, ok: bool) {
+parse_u32 :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (v: u32, ok: bool) {
 	initial_cur := p.cur
-	bytes := read_bytes(p, 4, thing) or_return
+	bytes := read_bytes(p, 4, thing, cur) or_return
 	res, _ := endian.get_u32(bytes, .Big)
 	return res, true
 }
 
-parse_png_int32 :: proc(p: ^Parser, thing: string) -> (v: int, ok: bool) {
+parse_png_int32 :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (v: int, ok: bool) {
 	initial_cur := p.cur
-	bytes := read_bytes(p, 4, thing) or_return
+	bytes := read_bytes(p, 4, thing, cur) or_return
 	res, _ := endian.get_u32(bytes, .Big)
 	if res > 0x7FFFFFFF {
 		parser_err(
@@ -350,20 +364,13 @@ parse_plte :: proc(p: ^Parser, cur: ^int = nil) -> (plte: PLTE, ok: bool) {
 	return plte, true
 }
 
-IDAT :: struct {
-	data: []byte,
-}
-
-parse_idat :: proc(p: ^Parser, cur: ^int = nil) -> (idat: IDAT, ok: bool) {
+parse_idat :: proc(p: ^Parser, cur: ^int = nil) -> ([]byte, bool) {
 	if cur != nil {
 		cur^ = p.cur
 	}
 
 	// Shortcut this one.
-	idat = IDAT {
-		data = p.buf,
-	}
-	return idat, true
+	return p.buf, true
 }
 
 parse_gama :: proc(p: ^Parser, cur: ^int = nil) -> (int, bool) {
