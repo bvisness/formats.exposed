@@ -161,30 +161,26 @@ parse :: proc "contextless" () -> bool {
 		if err != nil {
 			fmt.printf("\nError: %v\n", err)
 		}
-		data = bytes.buffer_to_bytes(&buf)
+		data = slice.clone(bytes.buffer_to_bytes(&buf))
 	}
 	fmt.printfln("Decompressed data: %d bytes", len(data))
-	for b in data {
-		append(&result, b)
+
+	scanlines: []byte
+	{
+		scanlineParser := Parser {
+			buf  = data,
+			out  = make([dynamic]byte), // TODO: What do we do with output data for a different byte source entirely?
+			errs = make([dynamic]ParseError),
+			cur  = 0,
+		}
+		defer for err in scanlineParser.errs {
+			append(&p.errs, err)
+		}
+		filtered_bytes := parse_scanlines(&scanlineParser, ihdr) or_return
+		result = filtered_bytes
 	}
+
 	return true
-
-	// scanlines: []byte
-	// {
-	// 	scanlineParser := Parser {
-	// 		buf  = data,
-	// 		out  = make([dynamic]byte), // TODO: What do we do with output data for a different byte source entirely?
-	// 		errs = make([dynamic]ParseError),
-	// 		cur  = 0,
-	// 	}
-	// 	defer for err in scanlineParser.errs {
-	// 		append(&p.errs, err)
-	// 	}
-	// 	filtered_bytes := parse_scanlines(&scanlineParser, ihdr) or_return
-	// 	result = filtered_bytes
-	// }
-
-	// return true
 }
 
 parse_u32 :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (v: u32, ok: bool) {
