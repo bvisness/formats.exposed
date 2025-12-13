@@ -54,8 +54,13 @@ get_result_len :: proc "contextless" () -> int {
 @(export)
 print_errors :: proc "contextless" () {
 	context = ctx
-	for err in errs {
-		fmt.printfln("at offset %d: %s", err.loc, err.message)
+	if len(errs) == 0 {
+		fmt.println("no errors")
+	} else {
+		fmt.println("ERRORS:")
+		for err in errs {
+			fmt.printfln("at offset %d: %s", err.loc, err.message)
+		}
 	}
 }
 
@@ -84,7 +89,7 @@ parse :: proc "contextless" () -> bool {
 		cur  = 0,
 	}
 	defer {
-		result = p.out
+		// result = p.out
 		errs = p.errs
 	}
 
@@ -159,8 +164,27 @@ parse :: proc "contextless" () -> bool {
 		data = bytes.buffer_to_bytes(&buf)
 	}
 	fmt.printfln("Decompressed data: %d bytes", len(data))
-
+	for b in data {
+		append(&result, b)
+	}
 	return true
+
+	// scanlines: []byte
+	// {
+	// 	scanlineParser := Parser {
+	// 		buf  = data,
+	// 		out  = make([dynamic]byte), // TODO: What do we do with output data for a different byte source entirely?
+	// 		errs = make([dynamic]ParseError),
+	// 		cur  = 0,
+	// 	}
+	// 	defer for err in scanlineParser.errs {
+	// 		append(&p.errs, err)
+	// 	}
+	// 	filtered_bytes := parse_scanlines(&scanlineParser, ihdr) or_return
+	// 	result = filtered_bytes
+	// }
+
+	// return true
 }
 
 parse_u32 :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (v: u32, ok: bool) {
@@ -399,6 +423,94 @@ parse_phys :: proc(p: ^Parser, cur: ^int = nil) -> (phys: PHYS, ok: bool) {
 		unit = read_byte(p, "pHYs unit") or_return,
 	}
 	return phys, true
+}
+
+parse_scanlines :: proc(
+	p: ^Parser,
+	ihdr: IHDR,
+	cur: ^int = nil,
+) -> (
+	filtered_bytes: [dynamic]byte,
+	ok: bool,
+) {
+	entries_per_pixel: int
+	switch ihdr.color_type {
+	case 0, 3:
+		// greyscale, indexed-color
+		entries_per_pixel = 1
+	case 2:
+		// truecolor
+		entries_per_pixel = 3
+	case 4:
+		// greyscale with alpha
+		entries_per_pixel = 2
+	case 6:
+		// truecolor with alpha
+		entries_per_pixel = 4
+	}
+	num_scanline_bits := ihdr.width * entries_per_pixel * int(ihdr.bit_depth)
+	num_scanline_bits += num_scanline_bits % 8
+	num_scanline_bytes := num_scanline_bits / 8
+
+	res := make([dynamic]byte)
+	prev_scanline: []byte
+	for row in 0 ..< ihdr.height {
+		fmt.printfln("row %d", row)
+
+		ft_cur: int
+		ft := read_byte(p, "filter type", &ft_cur) or_return
+		scanline := read_bytes(p, num_scanline_bytes, "scanline bytes") or_return
+
+		// For naming, see https://www.w3.org/TR/png-3/#9Filter-types
+
+		read_scanline: for x, col in scanline {
+			a := col == 0 ? 0 : scanline[col - 1]
+			b := prev_scanline == nil ? 0 : prev_scanline[col]
+			c := col == 0 ? 0 : (prev_scanline == nil ? 0 : prev_scanline[col - 1])
+
+			switch ft {
+			case 0:
+				// none
+				fmt.println("no filter")
+				append(&res, x)
+			case 1:
+				// sub
+				fmt.println("sub")
+				append(&res, x + a)
+			case 2:
+				// up
+				fmt.println("up")
+				append(&res, x + b)
+			case 3:
+				// average
+				fmt.println("average")
+				append(&res, x + byte((int(a) + int(b)) / 2))
+			case 4:
+				// Paeth
+				fmt.println("Paeth")
+				p := int(a) + int(b) - int(c)
+				pa := abs(p - int(a))
+				pb := abs(p - int(b))
+				pc := abs(p - int(c))
+				Pr: int
+				if pa <= pb && pa <= pc {
+					Pr = int(a)
+				} else if pb <= pc {
+					Pr = int(b)
+				} else {
+					Pr = int(c)
+				}
+				append(&res, x + byte(Pr))
+			case:
+				parser_err(p, ft_cur, fmt.aprintf("bad filter type for row %d: %d", row, ft))
+				break read_scanline
+			}
+		}
+
+		prev_scanline = scanline
+	}
+
+	return res, true
 }
 
 // ----------------------------------------------
