@@ -40,15 +40,15 @@ debugcheck :: proc "contextless" () {
 
 @(export)
 get_result :: proc "contextless" () -> ^byte {
-	if len(result) == 0 {
+	if len(out) == 0 {
 		return nil
 	}
-	return &result[0]
+	return &out[0]
 }
 
 @(export)
 get_result_len :: proc "contextless" () -> int {
-	return len(result)
+	return len(out)
 }
 
 @(export)
@@ -68,7 +68,7 @@ print_errors :: proc "contextless" () {
 // PNG parsing
 
 input: []byte
-result: [dynamic]byte
+out: [dynamic]byte
 errs: [dynamic]ParseError
 
 @(export)
@@ -84,13 +84,9 @@ parse :: proc "contextless" () -> bool {
 
 	p := Parser {
 		buf  = input,
-		out  = make([dynamic]byte),
-		errs = make([dynamic]ParseError),
+		out  = &out,
+		errs = &errs,
 		cur  = 0,
-	}
-	defer {
-		// result = p.out
-		errs = p.errs
 	}
 
 	expect_bytes(&p, {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, "magic") or_return
@@ -151,7 +147,7 @@ parse :: proc "contextless" () -> bool {
 		}
 	}
 
-	data: []byte
+	filtered_data: []byte
 	{
 		data_compressed := slice.concatenate(idats[:])
 
@@ -161,23 +157,19 @@ parse :: proc "contextless" () -> bool {
 		if err != nil {
 			fmt.printf("\nError: %v\n", err)
 		}
-		data = slice.clone(bytes.buffer_to_bytes(&buf))
+		filtered_data = slice.clone(bytes.buffer_to_bytes(&buf))
 	}
-	fmt.printfln("Decompressed data: %d bytes", len(data))
+	fmt.printfln("Decompressed data: %d bytes", len(filtered_data))
 
-	scanlines: []byte
+	image_bytes: [dynamic]byte
 	{
 		scanlineParser := Parser {
-			buf  = data,
-			out  = make([dynamic]byte), // TODO: What do we do with output data for a different byte source entirely?
-			errs = make([dynamic]ParseError),
+			buf  = filtered_data,
+			out  = &out, // TODO: What do we do with output data and errors for a different byte source entirely?
+			errs = &errs,
 			cur  = 0,
 		}
-		defer for err in scanlineParser.errs {
-			append(&p.errs, err)
-		}
-		filtered_bytes := parse_scanlines(&scanlineParser, ihdr) or_return
-		result = filtered_bytes
+		image_bytes = parse_scanlines(&scanlineParser, ihdr) or_return
 	}
 
 	return true
@@ -514,8 +506,8 @@ parse_scanlines :: proc(
 
 Parser :: struct {
 	buf:        []byte,
-	out:        [dynamic]byte,
-	errs:       [dynamic]ParseError,
+	out:        ^[dynamic]byte,
+	errs:       ^[dynamic]ParseError,
 	cur:        int,
 
 	// A value to offset the cursor by when reporting errors.
@@ -541,7 +533,7 @@ parser_err :: proc(
 	level: ErrorLevel = .Error,
 	loc := #caller_location,
 ) -> bool {
-	append(&p.errs, ParseError{loc = cur, level = level, message = msg}, loc)
+	append(p.errs, ParseError{loc = cur, level = level, message = msg}, loc)
 	return false
 }
 
