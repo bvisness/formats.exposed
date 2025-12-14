@@ -938,8 +938,19 @@ TkSuQmCC
       if (!ok) {
         throw new Error("failed parse");
       }
-      console.log("result", odinWasm.loadBytes(get_result(), get_result_len()));
+      const result = odinWasm.loadBytes(get_result(), get_result_len());
+      console.log("result", result);
       debugcheck();
+
+      // TODO
+      const WIDTH = 8;
+      const HEIGHT = 8;
+
+      const newImageData = new ImageData(new Uint8ClampedArray(result), 8, 8); // TODO
+      const ctx = window.canvas.getContext("2d");
+      ctx.putImageData(newImageData, 0, 0);
     })()
   </script>
+
+  <canvas id="canvas" width="8" height="8" style="width: 160px; height: 160px; image-rendering: crisp-edges"></canvas>
 </body>

@@ -172,6 +172,21 @@ parse :: proc "contextless" () -> bool {
 		image_bytes = parse_scanlines(&scanlineParser, ihdr) or_return
 	}
 
+	// TODO: Iterate with bit depth in mind. For now our test image is 8-bit RGB anyway.
+	pixelSize :: 3
+	image_rgba := make([]byte, ihdr.width * ihdr.height * 4) // RGBA for the browser
+	for r in 0 ..< ihdr.height {
+		for c in 0 ..< ihdr.width {
+			srcPix := r * ihdr.width * 3 + c * 3
+			dstPix := r * ihdr.width * 4 + c * 4
+			image_rgba[dstPix + 0] = filtered_data[srcPix + 0]
+			image_rgba[dstPix + 1] = filtered_data[srcPix + 1]
+			image_rgba[dstPix + 2] = filtered_data[srcPix + 2]
+			image_rgba[dstPix + 3] = 255
+		}
+	}
+	write_raw_bytes(&out, image_rgba)
+
 	return true
 }
 
@@ -501,6 +516,47 @@ parse_scanlines :: proc(
 	return res, true
 }
 
+
+// --------------------------------
+// CRC impl (adapted from Appendix D of the PNG spec)
+
+// Table of CRCs of all 8-bit messages.
+crc_table := proc "contextless" () -> (res: [256]u32) {
+	for n in 0 ..< 256 {
+		c := u32(n)
+		for k in 0 ..< 8 {
+			if c & 1 != 0 {
+				c = 0xEDB88320 ~ (c >> 1)
+			} else {
+				c = c >> 1
+			}
+		}
+		res[n] = c
+	}
+	return
+}()
+
+// Update a running CRC with the bytes buf[0..len-1]--the CRC
+// should be initialized to all 1's, and the transmitted value
+// is the 1's complement of the final running CRC (see the
+// crc() routine below).
+update_crc :: proc(crc: u32, buf: []byte) -> u32 {
+	c := crc
+	for b in buf {
+		c = crc_table[(c ~ u32(b)) & 0xFF] ~ (c >> 8)
+	}
+	return c
+}
+
+crc :: proc(bufs: ..[]byte) -> u32 {
+	res: u32 = 0xFFFFFFFF
+	for buf in bufs {
+		res = update_crc(res, buf)
+	}
+	return res ~ 0xFFFFFFFF
+}
+
+
 // ----------------------------------------------
 // General parsing and utilities
 
@@ -597,6 +653,41 @@ read_byte :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (byte, bool) {
 	return bytes[0], true
 }
 
+write_str :: proc(out: ^[dynamic]byte, str: string) -> runtime.Allocator_Error {
+	write_bytes(out, transmute([]byte)str) or_return
+	return .None
+}
+
+write_int :: proc(out: ^[dynamic]byte, n: int) -> runtime.Allocator_Error {
+	return write_i32(out, i32(n))
+}
+
+write_i32 :: proc(out: ^[dynamic]byte, n: i32) -> runtime.Allocator_Error {
+	dst := _grow(out, 4) or_return
+	must(endian.put_i32(dst, .Little, n))
+	return .None
+}
+
+write_bytes :: proc(out: ^[dynamic]byte, bytes: []byte) -> runtime.Allocator_Error {
+	write_int(out, len(bytes)) or_return
+	write_raw_bytes(out, bytes) or_return
+	return .None
+}
+
+write_raw_bytes :: proc(out: ^[dynamic]byte, bytes: []byte) -> runtime.Allocator_Error {
+	dst := _grow(out, len(bytes)) or_return
+	copy(dst, bytes)
+	return .None
+}
+
+_grow :: proc(out: ^[dynamic]byte, n: int) -> ([]byte, runtime.Allocator_Error) {
+	start := len(out)
+	if err := resize(out, len(out) + n); err != .None {
+		return nil, err
+	}
+	return out[start:], .None
+}
+
 hexes :: proc(data: []byte, allocator := context.allocator) -> string {
 	runes := []rune{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'}
 
@@ -611,46 +702,16 @@ hexes :: proc(data: []byte, allocator := context.allocator) -> string {
 	return strings.clone(strings.to_string(sb), allocator)
 }
 
-must :: proc(v: $T, ok: bool) -> T {
+must1 :: proc(ok: bool) {
+	assert(ok)
+}
+
+must2 :: proc(v: $T, ok: bool) -> T {
 	assert(ok)
 	return v
 }
 
-// --------------------------------
-// CRC impl (adapted from Appendix D of the PNG spec)
-
-// Table of CRCs of all 8-bit messages.
-crc_table := proc "contextless" () -> (res: [256]u32) {
-	for n in 0 ..< 256 {
-		c := u32(n)
-		for k in 0 ..< 8 {
-			if c & 1 != 0 {
-				c = 0xEDB88320 ~ (c >> 1)
-			} else {
-				c = c >> 1
-			}
-		}
-		res[n] = c
-	}
-	return
-}()
-
-// Update a running CRC with the bytes buf[0..len-1]--the CRC
-// should be initialized to all 1's, and the transmitted value
-// is the 1's complement of the final running CRC (see the
-// crc() routine below).
-update_crc :: proc(crc: u32, buf: []byte) -> u32 {
-	c := crc
-	for b in buf {
-		c = crc_table[(c ~ u32(b)) & 0xFF] ~ (c >> 8)
-	}
-	return c
-}
-
-crc :: proc(bufs: ..[]byte) -> u32 {
-	res: u32 = 0xFFFFFFFF
-	for buf in bufs {
-		res = update_crc(res, buf)
-	}
-	return res ~ 0xFFFFFFFF
+must :: proc {
+	must1,
+	must2,
 }
