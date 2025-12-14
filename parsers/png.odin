@@ -161,7 +161,7 @@ parse :: proc "contextless" () -> bool {
 	}
 	fmt.printfln("Decompressed data: %d bytes", len(filtered_data))
 
-	image_bytes: [dynamic]byte
+	image_bytes: []byte
 	{
 		scanlineParser := Parser {
 			buf  = filtered_data,
@@ -173,15 +173,14 @@ parse :: proc "contextless" () -> bool {
 	}
 
 	// TODO: Iterate with bit depth in mind. For now our test image is 8-bit RGB anyway.
-	pixelSize :: 3
 	image_rgba := make([]byte, ihdr.width * ihdr.height * 4) // RGBA for the browser
 	for r in 0 ..< ihdr.height {
 		for c in 0 ..< ihdr.width {
 			srcPix := r * ihdr.width * 3 + c * 3
 			dstPix := r * ihdr.width * 4 + c * 4
-			image_rgba[dstPix + 0] = filtered_data[srcPix + 0]
-			image_rgba[dstPix + 1] = filtered_data[srcPix + 1]
-			image_rgba[dstPix + 2] = filtered_data[srcPix + 2]
+			image_rgba[dstPix + 0] = image_bytes[srcPix + 0]
+			image_rgba[dstPix + 1] = image_bytes[srcPix + 1]
+			image_rgba[dstPix + 2] = image_bytes[srcPix + 2]
 			image_rgba[dstPix + 3] = 255
 		}
 	}
@@ -433,7 +432,7 @@ parse_scanlines :: proc(
 	ihdr: IHDR,
 	cur: ^int = nil,
 ) -> (
-	filtered_bytes: [dynamic]byte,
+	filtered_bytes: []byte,
 	ok: bool,
 ) {
 	entries_per_pixel: int
@@ -455,11 +454,36 @@ parse_scanlines :: proc(
 	num_scanline_bits += num_scanline_bits % 8
 	num_scanline_bytes := num_scanline_bits / 8
 
-	res := make([dynamic]byte)
-	prev_scanline: []byte
-	for row in 0 ..< ihdr.height {
-		fmt.printfln("row %d", row)
+	// The spec says that to find a (and c) you must look at "the byte
+	// corresponding to x in the pixel immediately before the pixel containing x
+	// (or the byte immediately before x, when the bit depth is less than 8)".
+	//
+	// This is confusingly worded but sensible once you break it down.
+	//
+	// Suppose you have the following scanline using the Sub filter (with indices
+	// labeled):
+	//
+	//     [0, 0, 255, 0, 0, 0]
+	//      0  1  2    3  4  5
+	//
+	// This should result in two blue pixels, because each entry refers to the
+	// byte three bytes prior. This is intuitive: red minus red, green minus
+	// green, blue minus blue.
+	//
+	// However, since deltas are computed on a byte-by-byte basis, this naturally
+	// leads to two edge cases:
+	//  - With a bit depth of 16, each channel is spread across two bytes, so
+	//    deltas are computed bytewise against the previous bytes for that
+	//    channel (high minus high, low minus low).
+	//  - With a bit depth less than 8, pixels are packed, so deltas are simply
+	//    computed from the previous byte.
+	//
+	// Here we compute an offset that we can add or subtract to get this
+	// neighboring byte within a row.
+	offset_to_prev_pixel := ihdr.bit_depth < 8 ? 1 : (int(ihdr.bit_depth) / 8 * entries_per_pixel)
 
+	res := make([]byte, num_scanline_bytes * ihdr.height)
+	for row in 0 ..< ihdr.height {
 		ft_cur: int
 		ft := read_byte(p, "filter type", &ft_cur) or_return
 		scanline := read_bytes(p, num_scanline_bytes, "scanline bytes") or_return
@@ -467,27 +491,29 @@ parse_scanlines :: proc(
 		// For naming, see https://www.w3.org/TR/png-3/#9Filter-types
 
 		read_scanline: for x, col in scanline {
-			a := col == 0 ? 0 : scanline[col - 1]
-			b := prev_scanline == nil ? 0 : prev_scanline[col]
-			c := col == 0 ? 0 : (prev_scanline == nil ? 0 : prev_scanline[col - 1])
+			x_idx := row * num_scanline_bytes + col
+			a := col < offset_to_prev_pixel ? 0 : res[x_idx - offset_to_prev_pixel]
+			b := row == 0 ? 0 : res[x_idx - num_scanline_bytes]
+			c :=
+				col < offset_to_prev_pixel ? 0 : (row == 0 ? 0 : res[x_idx - num_scanline_bytes - offset_to_prev_pixel])
 
 			switch ft {
 			case 0:
 				// none
 				fmt.println("no filter")
-				append(&res, x)
+				res[x_idx] = x
 			case 1:
 				// sub
 				fmt.println("sub")
-				append(&res, x + a)
+				res[x_idx] = x + a
 			case 2:
 				// up
 				fmt.println("up")
-				append(&res, x + b)
+				res[x_idx] = x + b
 			case 3:
 				// average
 				fmt.println("average")
-				append(&res, x + byte((int(a) + int(b)) / 2))
+				res[x_idx] = x + byte((int(a) + int(b)) / 2)
 			case 4:
 				// Paeth
 				fmt.println("Paeth")
@@ -503,14 +529,12 @@ parse_scanlines :: proc(
 				} else {
 					Pr = int(c)
 				}
-				append(&res, x + byte(Pr))
+				res[x_idx] = x + byte(Pr)
 			case:
 				parser_err(p, ft_cur, fmt.aprintf("bad filter type for row %d: %d", row, ft))
 				break read_scanline
 			}
 		}
-
-		prev_scanline = scanline
 	}
 
 	return res, true
