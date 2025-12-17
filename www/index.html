@@ -35,11 +35,17 @@
       console.log("result", result);
       debugcheck();
 
-      // TODO
-      const WIDTH = 8;
-      const HEIGHT = 8;
+      const dataView = new DataView(result.buffer, result.byteOffset, result.byteLength);
+      const width = dataView.getInt32(0, true);
+      const height = dataView.getInt32(4, true);
+      const rgba = new Uint8ClampedArray(result).slice(8);
 
-      const newImageData = new ImageData(new Uint8ClampedArray(result), 8, 8); // TODO
+      window.canvas.width = width;
+      window.canvas.height = height;
+      window.canvas.style.width = `${width * 4}px`;
+      window.canvas.style.height = `${height * 4}px`;
+
+      const newImageData = new ImageData(rgba, width, height);
       const ctx = window.canvas.getContext("2d");
       ctx.putImageData(newImageData, 0, 0);
     }
@@ -54,6 +60,16 @@
       const data = await file.bytes();
       await doit(data);
     }
+
+    (async () => {
+      const searchParams = new URL(window.location.toString()).searchParams;
+      const initialFile = searchParams.get("file");
+      if (initialFile) {
+        const res = await fetch(initialFile);
+        const bytes = await res.bytes();
+        await doit(bytes);
+      }
+    })()
   </script>
 
   <div>

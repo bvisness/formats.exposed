@@ -184,6 +184,11 @@ parse :: proc "contextless" () -> bool {
 			image_rgba[dstPix + 3] = 255
 		}
 	}
+
+	// TODO: We really should just be dumping all the info we parsed in some standard format. But I'm
+	// not quite ready to jump into that.
+	write_int(&out, ihdr.width)
+	write_int(&out, ihdr.height)
 	write_raw_bytes(&out, image_rgba)
 
 	return true
