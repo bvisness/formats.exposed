@@ -176,12 +176,35 @@ parse :: proc "contextless" () -> bool {
 	image_rgba := make([]byte, ihdr.width * ihdr.height * 4) // RGBA for the browser
 	for r in 0 ..< ihdr.height {
 		for c in 0 ..< ihdr.width {
-			srcPix := r * ihdr.width * 3 + c * 3
+			// TODO: This all only works because we have a bit depth of 8. Again, iterate with bit depth in mind.
+			srcPix :=
+				r * ihdr.width * entries_per_pixel(ihdr.color_type) +
+				c * entries_per_pixel(ihdr.color_type)
 			dstPix := r * ihdr.width * 4 + c * 4
-			image_rgba[dstPix + 0] = image_bytes[srcPix + 0]
-			image_rgba[dstPix + 1] = image_bytes[srcPix + 1]
-			image_rgba[dstPix + 2] = image_bytes[srcPix + 2]
-			image_rgba[dstPix + 3] = 255
+
+			switch ihdr.color_type {
+			case 0:
+			// greyscale
+			// TODO
+			case 2:
+				// truecolor
+				image_rgba[dstPix + 0] = image_bytes[srcPix + 0]
+				image_rgba[dstPix + 1] = image_bytes[srcPix + 1]
+				image_rgba[dstPix + 2] = image_bytes[srcPix + 2]
+				image_rgba[dstPix + 3] = 255
+			case 3:
+			// indexed-color
+			// TODO
+			case 4:
+			// greyscale with alpha
+			// TODO
+			case 6:
+				// truecolor with alpha
+				image_rgba[dstPix + 0] = image_bytes[srcPix + 0]
+				image_rgba[dstPix + 1] = image_bytes[srcPix + 1]
+				image_rgba[dstPix + 2] = image_bytes[srcPix + 2]
+				image_rgba[dstPix + 3] = image_bytes[srcPix + 3]
+			}
 		}
 	}
 
@@ -440,22 +463,7 @@ parse_scanlines :: proc(
 	filtered_bytes: []byte,
 	ok: bool,
 ) {
-	entries_per_pixel: int
-	switch ihdr.color_type {
-	case 0, 3:
-		// greyscale, indexed-color
-		entries_per_pixel = 1
-	case 2:
-		// truecolor
-		entries_per_pixel = 3
-	case 4:
-		// greyscale with alpha
-		entries_per_pixel = 2
-	case 6:
-		// truecolor with alpha
-		entries_per_pixel = 4
-	}
-	num_scanline_bits := ihdr.width * entries_per_pixel * int(ihdr.bit_depth)
+	num_scanline_bits := ihdr.width * entries_per_pixel(ihdr.color_type) * int(ihdr.bit_depth)
 	num_scanline_bits += num_scanline_bits % 8
 	num_scanline_bytes := num_scanline_bits / 8
 
@@ -485,7 +493,8 @@ parse_scanlines :: proc(
 	//
 	// Here we compute an offset that we can add or subtract to get this
 	// neighboring byte within a row.
-	offset_to_prev_pixel := ihdr.bit_depth < 8 ? 1 : (int(ihdr.bit_depth) / 8 * entries_per_pixel)
+	offset_to_prev_pixel :=
+		ihdr.bit_depth < 8 ? 1 : (int(ihdr.bit_depth) / 8 * entries_per_pixel(ihdr.color_type))
 
 	res := make([]byte, num_scanline_bytes * ihdr.height)
 	for row in 0 ..< ihdr.height {
@@ -543,6 +552,25 @@ parse_scanlines :: proc(
 	}
 
 	return res, true
+}
+
+entries_per_pixel :: proc(color_type: u8) -> int {
+	switch color_type {
+	case 0, 3:
+		// greyscale, indexed-color
+		return 1
+	case 2:
+		// truecolor
+		return 3
+	case 4:
+		// greyscale with alpha
+		return 2
+	case 6:
+		// truecolor with alpha
+		return 4
+	case:
+		return -1
+	}
 }
 
 
