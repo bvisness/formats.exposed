@@ -172,14 +172,13 @@ parse :: proc "contextless" () -> bool {
 		image_bytes = parse_scanlines(&scanlineParser, ihdr) or_return
 	}
 
-	// TODO: Iterate with bit depth in mind. For now our test image is 8-bit RGB anyway.
+	src := ImageDataIterator {
+		data      = image_bytes,
+		bit_depth = ihdr.bit_depth,
+	}
 	image_rgba := make([]byte, ihdr.width * ihdr.height * 4) // RGBA for the browser
 	for r in 0 ..< ihdr.height {
 		for c in 0 ..< ihdr.width {
-			// TODO: This all only works because we have a bit depth of 8. Again, iterate with bit depth in mind.
-			srcPix :=
-				r * ihdr.width * entries_per_pixel(ihdr.color_type) +
-				c * entries_per_pixel(ihdr.color_type)
 			dstPix := r * ihdr.width * 4 + c * 4
 
 			switch ihdr.color_type {
@@ -188,22 +187,27 @@ parse :: proc "contextless" () -> bool {
 			// TODO
 			case 2:
 				// truecolor
-				image_rgba[dstPix + 0] = image_bytes[srcPix + 0]
-				image_rgba[dstPix + 1] = image_bytes[srcPix + 1]
-				image_rgba[dstPix + 2] = image_bytes[srcPix + 2]
+				// TODO: Bit depths of 16 are not going to be ok here. But I do need to produce RGBA in the end.
+				image_rgba[dstPix + 0] = u8(next_sample(&src))
+				image_rgba[dstPix + 1] = u8(next_sample(&src))
+				image_rgba[dstPix + 2] = u8(next_sample(&src))
 				image_rgba[dstPix + 3] = 255
 			case 3:
-			// indexed-color
-			// TODO
+				// indexed-color
+				palette_entry := plte.(PLTE).entries[next_sample(&src)]
+				image_rgba[dstPix + 0] = palette_entry.R
+				image_rgba[dstPix + 1] = palette_entry.G
+				image_rgba[dstPix + 2] = palette_entry.B
+				image_rgba[dstPix + 3] = 255 // TODO: tRNS chunk if available
 			case 4:
 			// greyscale with alpha
 			// TODO
 			case 6:
 				// truecolor with alpha
-				image_rgba[dstPix + 0] = image_bytes[srcPix + 0]
-				image_rgba[dstPix + 1] = image_bytes[srcPix + 1]
-				image_rgba[dstPix + 2] = image_bytes[srcPix + 2]
-				image_rgba[dstPix + 3] = image_bytes[srcPix + 3]
+				image_rgba[dstPix + 0] = u8(next_sample(&src))
+				image_rgba[dstPix + 1] = u8(next_sample(&src))
+				image_rgba[dstPix + 2] = u8(next_sample(&src))
+				image_rgba[dstPix + 3] = u8(next_sample(&src))
 			}
 		}
 	}
@@ -514,23 +518,18 @@ parse_scanlines :: proc(
 			switch ft {
 			case 0:
 				// none
-				fmt.println("no filter")
 				res[x_idx] = x
 			case 1:
 				// sub
-				fmt.println("sub")
 				res[x_idx] = x + a
 			case 2:
 				// up
-				fmt.println("up")
 				res[x_idx] = x + b
 			case 3:
 				// average
-				fmt.println("average")
 				res[x_idx] = x + byte((int(a) + int(b)) / 2)
 			case 4:
 				// Paeth
-				fmt.println("Paeth")
 				p := int(a) + int(b) - int(c)
 				pa := abs(p - int(a))
 				pb := abs(p - int(b))
@@ -571,6 +570,47 @@ entries_per_pixel :: proc(color_type: u8) -> int {
 	case:
 		return -1
 	}
+}
+
+ImageDataIterator :: struct {
+	data:        []byte,
+	bit_depth:   u8,
+
+	// No need to initialize these.
+	byte_idx:    int,
+	subbyte_idx: uint,
+}
+
+next_sample :: proc(it: ^ImageDataIterator) -> int {
+	result: int
+
+	switch it.bit_depth {
+	case 1:
+		mask := u8(0x01 << it.subbyte_idx)
+		result = int((it.data[it.byte_idx] & mask) >> it.subbyte_idx)
+	case 2:
+		mask := u8(0x03 << it.subbyte_idx)
+		result = int((it.data[it.byte_idx] & mask) >> it.subbyte_idx)
+	case 4:
+		mask := u8(0x0F << it.subbyte_idx)
+		result = int((it.data[it.byte_idx] & mask) >> it.subbyte_idx)
+	case 8:
+		result = int(it.data[it.byte_idx])
+	case 16:
+		result = int(must(endian.get_i32(it.data[it.byte_idx:it.byte_idx + 2], .Big)))
+	}
+
+	if it.bit_depth < 8 {
+		it.subbyte_idx += uint(it.bit_depth)
+		if it.subbyte_idx >= 8 {
+			it.subbyte_idx = 0
+			it.byte_idx += 1
+		}
+	} else {
+		it.byte_idx += int(it.bit_depth) / 8
+	}
+
+	return result
 }
 
 
