@@ -69,7 +69,7 @@ print_errors :: proc "contextless" () {
 
 input: []byte
 out: [dynamic]byte
-errs: [dynamic]ParseError
+errs: [dynamic]Error
 
 @(export)
 alloc :: proc "contextless" (n: int) -> ^byte {
@@ -102,6 +102,7 @@ parse :: proc "contextless" () -> bool {
 	chunks: for {
 		data_cur, crc_cur: int
 
+		parse_start(&p, "chunk") or_return
 		data_len := parse_png_int32(&p, "chunk size") or_return
 		chunk_type := parse_chunk_type(&p) or_return
 		data := read_bytes(&p, data_len, "chunk data", &data_cur) or_return
@@ -115,7 +116,31 @@ parse :: proc "contextless" () -> bool {
 				.Warning,
 			)
 		}
+		parse_end(&p) or_return
 		fmt.printfln("%s: %d bytes", string(chunk_type.name), data_len)
+
+		// TODO: I hate this. Why can I not figure out how to organize the data
+		// here so I can view it on the other side? It seems like I'll just end up
+		// writing a whole new parser for PNG on the other side of the boundary,
+		// which is genuinely stupid. What am I doing here?
+		//
+		// Why make structs on this side? What good does it do me? I want to
+		// actually write a viewer program that takes advantage of all the parsing
+		// I already did, NOT just dump yet another format. So that means I have to
+		// keep basically all the logic on the Odin side.
+		//
+		// Why wasn't this a problem before, in LLMV? I guess because the
+		// visualization logic was extremely uniform. So basically, all I was doing
+		// was dumping uniform data that I could look up by pointer. But now I have
+		// totally heterogeneous data that will be presented in a bunch of
+		// different ways, which means that any parsing I do is basically thrown
+		// away.
+		//
+		// So this means I need to figure out how to drive all the visualization
+		// logic from the Odin side. Which seems totally fine, probably, even if
+		// the JS visualizations are bespoke. I will still want to have the hex
+		// view be driven by something common, but I can easily just maintain a
+		// buffer of those on the WASM side.
 
 		chunk_parser := make_subparser(&p, data, data_cur)
 		switch string(chunk_type.name) {
@@ -212,12 +237,6 @@ parse :: proc "contextless" () -> bool {
 		}
 	}
 
-	// TODO: We really should just be dumping all the info we parsed in some standard format. But I'm
-	// not quite ready to jump into that.
-	write_int(&out, ihdr.width)
-	write_int(&out, ihdr.height)
-	write_raw_bytes(&out, image_rgba)
-
 	return true
 }
 
@@ -225,6 +244,7 @@ parse_u32 :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (v: u32, ok: bo
 	initial_cur := p.cur
 	bytes := read_bytes(p, 4, thing, cur) or_return
 	res, _ := endian.get_u32(bytes, .Big)
+
 	return res, true
 }
 
@@ -240,6 +260,9 @@ parse_png_int32 :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (v: int, 
 			.Warning,
 		)
 	}
+
+	write_int(p, int(res)) or_return
+
 	return int(res), true
 }
 
@@ -272,6 +295,9 @@ parse_chunk_type :: proc(p: ^Parser) -> (type: ChunkType, ok: bool) {
 		reserved     = name[2] & 0b10000 != 0,
 		safe_to_copy = name[3] & 0b10000 != 0,
 	}
+
+	write_bytes(p, name) or_return
+
 	return ty, true
 }
 
@@ -658,17 +684,21 @@ crc :: proc(bufs: ..[]byte) -> u32 {
 // General parsing and utilities
 
 Parser :: struct {
+	// Input
 	buf:        []byte,
-	out:        ^[dynamic]byte,
-	errs:       ^[dynamic]ParseError,
+	errs:       ^[dynamic]Error,
 	cur:        int,
+
+	// Output
+	out:        ^[dynamic]byte,
+	out_err:    Maybe(runtime.Allocator_Error),
 
 	// A value to offset the cursor by when reporting errors.
 	// Used by subparsers.
 	cur_offset: int,
 }
 
-ParseError :: struct {
+Error :: struct {
 	loc:     int,
 	level:   ErrorLevel,
 	message: string,
@@ -686,7 +716,7 @@ parser_err :: proc(
 	level: ErrorLevel = .Error,
 	loc := #caller_location,
 ) -> bool {
-	append(p.errs, ParseError{loc = cur, level = level, message = msg}, loc)
+	append(p.errs, Error{loc = cur, level = level, message = msg}, loc)
 	return false
 }
 
@@ -716,6 +746,9 @@ expect_bytes :: proc(p: ^Parser, bs: []byte, thing: string, cur: ^int = nil) -> 
 			.Error,
 		)
 	}
+
+	write_str(p, thing) or_return
+	write_span(p, initial_cur, len(bs))
 
 	return true
 }
@@ -750,31 +783,61 @@ read_byte :: proc(p: ^Parser, thing: string, cur: ^int = nil) -> (byte, bool) {
 	return bytes[0], true
 }
 
-write_str :: proc(out: ^[dynamic]byte, str: string) -> runtime.Allocator_Error {
-	write_bytes(out, transmute([]byte)str) or_return
-	return .None
+parse_start :: proc(p: ^Parser, thing: string) -> bool {
+	write_byte(p, 0x01) or_return
+	write_str(p, thing)
+	return true
 }
 
-write_int :: proc(out: ^[dynamic]byte, n: int) -> runtime.Allocator_Error {
-	return write_i32(out, i32(n))
+parse_end :: proc(p: ^Parser) -> bool {
+	write_byte(p, 0x02) or_return
+	return true
 }
 
-write_i32 :: proc(out: ^[dynamic]byte, n: i32) -> runtime.Allocator_Error {
-	dst := _grow(out, 4) or_return
+write_str :: proc(p: ^Parser, str: string) -> bool {
+	write_bytes(p, transmute([]byte)str) or_return
+	return true
+}
+
+write_int :: proc(p: ^Parser, n: int) -> bool {
+	return write_i32(p, i32(n))
+}
+
+write_i32 :: proc(p: ^Parser, n: i32) -> bool {
+	dst, err := _grow(p.out, 4)
+	if err != nil {
+		p.out_err = err
+		return false
+	}
 	must(endian.put_i32(dst, .Little, n))
-	return .None
+	return true
 }
 
-write_bytes :: proc(out: ^[dynamic]byte, bytes: []byte) -> runtime.Allocator_Error {
-	write_int(out, len(bytes)) or_return
-	write_raw_bytes(out, bytes) or_return
-	return .None
+write_byte :: proc(p: ^Parser, b: byte) -> bool {
+	write_raw_bytes(p, []byte{b}) or_return
+	return true
 }
 
-write_raw_bytes :: proc(out: ^[dynamic]byte, bytes: []byte) -> runtime.Allocator_Error {
-	dst := _grow(out, len(bytes)) or_return
+write_bytes :: proc(p: ^Parser, bytes: []byte) -> bool {
+	write_int(p, len(bytes)) or_return
+	write_raw_bytes(p, bytes) or_return
+	return true
+}
+
+write_raw_bytes :: proc(p: ^Parser, bytes: []byte) -> bool {
+	dst, err := _grow(p.out, len(bytes))
+	if err != nil {
+		p.out_err = err
+		return false
+	}
 	copy(dst, bytes)
-	return .None
+	return true
+}
+
+write_span :: proc(p: ^Parser, ptr: int, length: int) -> bool {
+	write_int(p, ptr) or_return
+	write_int(p, length) or_return
+	return true
 }
 
 _grow :: proc(out: ^[dynamic]byte, n: int) -> ([]byte, runtime.Allocator_Error) {
