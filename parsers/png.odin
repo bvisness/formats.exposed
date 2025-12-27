@@ -39,19 +39,6 @@ debugcheck :: proc "contextless" () {
 }
 
 @(export)
-get_result :: proc "contextless" () -> ^byte {
-	if len(out) == 0 {
-		return nil
-	}
-	return &out[0]
-}
-
-@(export)
-get_result_len :: proc "contextless" () -> int {
-	return len(out)
-}
-
-@(export)
 print_errors :: proc "contextless" () {
 	context = ctx
 	if len(errs) == 0 {
@@ -68,7 +55,6 @@ print_errors :: proc "contextless" () {
 // PNG parsing
 
 input: []byte
-out: [dynamic]byte
 errs: [dynamic]Error
 
 @(export)
@@ -84,7 +70,6 @@ parse :: proc "contextless" () -> bool {
 
 	p := Parser {
 		buf  = input,
-		out  = &out,
 		errs = &errs,
 		cur  = 0,
 	}
@@ -127,7 +112,6 @@ parse :: proc "contextless" () -> bool {
 			fmt.printfln("%#v", plte)
 		case "IDAT":
 			idat, _ := parse_idat(&chunk_parser)
-			// fmt.printfln("%#v", idat)
 			append(&idats, idat)
 		case "IEND":
 			break chunks
@@ -165,8 +149,7 @@ parse :: proc "contextless" () -> bool {
 	{
 		scanlineParser := Parser {
 			buf  = filtered_data,
-			out  = &out, // TODO: What do we do with output data and errors for a different byte source entirely?
-			errs = &errs,
+			errs = &errs, // TODO: What do we do with errors for a different byte source entirely?
 			cur  = 0,
 		}
 		image_bytes = parse_scanlines(&scanlineParser, ihdr) or_return
@@ -660,10 +643,6 @@ Parser :: struct {
 	errs:       ^[dynamic]Error,
 	cur:        int,
 
-	// Output
-	out:        ^[dynamic]byte,
-	out_err:    Maybe(runtime.Allocator_Error),
-
 	// A value to offset the cursor by when reporting errors.
 	// Used by subparsers.
 	cur_offset: int,
@@ -692,7 +671,7 @@ parser_err :: proc(
 }
 
 make_subparser :: proc(p: ^Parser, buf: []byte, buf_cur: int) -> Parser {
-	return Parser{buf = buf, out = p.out, errs = p.errs, cur = 0, cur_offset = -buf_cur}
+	return Parser{buf = buf, errs = p.errs, cur = 0, cur_offset = -buf_cur}
 }
 
 expect_bytes :: proc(p: ^Parser, bs: []byte, thing: string, cur: ^int = nil) -> bool {
