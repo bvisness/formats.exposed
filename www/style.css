@@ -1,0 +1,15 @@
+body {
+  margin: 0;
+  font-family: Inter, sans-serif;
+  /* TODO: Install a real web font */
+}
+
+.fe-tree-item {
+  border: 1px solid black;
+  border-radius: 8px;
+  padding: 1rem;
+
+  h3 {
+    margin: 0;
+  }
+}

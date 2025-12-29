@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <head>
   <meta charset="utf-8">
+  <link rel="stylesheet" href="/style.css">
 </head>
 
 <body>
@@ -81,4 +82,52 @@
     >
   </div>
   <canvas id="canvas" width="8" height="8" style="width: 160px; height: 160px; image-rendering: crisp-edges"></canvas>
+
+  <div id="tree">
+    <div>
+      <p>
+        PNG is a simple image format based on general-purpose compression algorithms. A typical PNG is a simple array of RGB(A) values compressed with deflate and encoded using the zlib format. To improve data compression, each row of the image data can optionally be "filtered" by first encoding the data as deltas. Additionally, PNG images can define a color palette and encode a list of palette indices instead of RGB(A) values.
+      </p>
+      <p>
+        The PNG file structure is a list of chunks. Each chunk has a type, a size, and some chunk-specific data.  All numbers in PNG are big-endian, meaning the most significant byte comes first—the spec somewhat erroneously calls this "network byte order".
+      </p>
+      <p>
+        The most critical chunks in PNG are:
+        <ul>
+          <li><b>IHDR:</b> Defines the image width, height, and encoding info (color mode, bits per pixel, use of palettes, and interlacing).</li>
+          <li><b>PLTE:</b> Defines the image's palette, if used.</li>
+          <li><b>IDAT:</b> Contains the zlib-compressed image data. The data may be spread across many IDAT chunks.</li>
+          <li><b>IEND:</b> Signals the end of the PNG data.</li>
+        </ul>
+      </p>
+    </div>
+    <div class="fe-tree-item">
+      <h3>PNG signature ("magic")</h3>
+      <div>PNG images always begin with the bytes <code>89 50 4E 47 0D 0A 1A 0A</code>. This allows tools to guess that they are working with PNG data regardless of file name.</div>
+    </div>
+    <div class="fe-tree-item">
+      <h3>IHDR chunk ("Image header")</h3>
+      <div>
+        <p>
+          The IHDR chunk is always the first chunk in the PNG. It defines the basic information required to decode the PNG, such as the width, height, color mode, and bits per pixel. All of the below fields are required.
+        </p>
+        <ul>
+          <li><b>Width = ???:</b> The width of the image, in pixels.</li>
+          <li><b>Height = ???:</b> The width of the image, in pixels.</li>
+          <li><b>Bit depth = ???:</b> The number of bits used to encode a single color value or palette index. Can be 1, 2, 4, 8, or 16, but in practice is almost always 8.</li>
+          <li><b>Color type = ???:</b> The color mode of the image. Five color modes are possible: greyscale, truecolor, greyscale with alpha, truecolor with alpha, and indexed-color (using palettes).</li>
+          <li><b>Compression method = ???:</b> Always 0, indicating deflate compression.</li>
+          <li><b>Filter method = ???:</b> Always 0.</li>
+          <li><b>Interlace method = ???:</b> Whether the image data is interlaced (which is very uncommon these days).</li>
+        </ul>
+        <p>
+          The color type and bit depth together indicate that each pixel of the decompressed image data will look like:
+        </p>
+        <div>TODO: Dynamic diagram of bit width, RGB, and maybe palette use.</div>
+        <p>
+          In addition, because the indexed-color mode is used, a PLTE ("palette") chunk will be expected, as well as possibly a tRNS ("transparency") chunk to define alpha values for the palette. (TODO: ONLY WHEN COLOR TYPE = INDEXED)
+        </p>
+      </div>
+    </div>
+  </div>
 </body>
